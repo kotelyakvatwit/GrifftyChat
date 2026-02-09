@@ -1,3 +1,12 @@
+"""
+Simple TCP chat client.
+
+Connects to a server on port 1313 and provides a minimal interactive client.
+- Starts two daemon threads: one reads stdin and sends messages; the other prints
+  messages received from the server.
+Usage: run the script, enter server address when prompted, type messages to send,
+type 'exit' to quit and 'help' for a short hint.
+"""
 import socket
 import sys
 import threading
@@ -6,6 +15,16 @@ s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 active = True
 
 def input_thread():
+    """
+    Read lines from stdin and send them to the server.
+
+    Special commands:
+    - 'exit' (case-insensitive): stop the client and trigger shutdown.
+    - 'help' : print a short usage hint from the server.
+
+    The function runs while the module-level `active` flag is True and
+    ignores common I/O errors to allow a clean thread exit.
+    """
     global active
     while active:
         try:
@@ -22,6 +41,12 @@ def input_thread():
             break
 
 def output_thread():
+    """
+    Receive messages from the server and print them to stdout.
+
+    If the server closes the connection (recv returns an empty bytes object),
+    the thread prints a notice, clears `active` and exits.
+    """
     global active
     while True:
         try:
@@ -36,6 +61,12 @@ def output_thread():
             break
 
 def main():
+    """
+    Prompt for the server address, connect, and run the client threads.
+
+    Starts the input and output threads as daemons and waits while `active` is True.
+    Cleans up the socket on exit and handles KeyboardInterrupt for graceful shutdown.
+    """
     global s
     server_address = str(input("Enter server address: "))
     try:
@@ -45,15 +76,15 @@ def main():
         return
     print("Connected to server. Type messages to send. Type 'exit' to quit.")
 
-    input_T = threading.Thread(target=input_thread, daemon=True)
-    output_T = threading.Thread(target=output_thread, daemon=True)
+    input_t = threading.Thread(target=input_thread, daemon=True)
+    output_t = threading.Thread(target=output_thread, daemon=True)
 
     try:
-        input_T.start()
-        output_T.start()
+        input_t.start()
+        output_t.start()
         while active:
-            input_T.join(0.5)
-            output_T.join(0.5)
+            input_t.join(0.5)
+            output_t.join(0.5)
     except KeyboardInterrupt:
         print("Interrupted by user.")
     finally:

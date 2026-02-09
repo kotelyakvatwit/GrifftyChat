@@ -1,12 +1,25 @@
+"""
+Simple TCP chat server.
+
+Listens on port 1313, accepts clients and provides a simple echo service plus
+commands for client-to-client messaging. A background input thread accepts
+administrative commands (currently: 'exit' to stop the server).
+"""
 import socket
 import threading
 
 active = True
-
 clients_lock = threading.Lock()
 clients = {}
 
-def processInput():
+def process_input():
+    """
+    Read admin commands from stdin in a background thread.
+
+    Current command:
+    - 'exit' : set global `active` to False to stop the server accept loop.
+    Unknown commands are reported back to the operator.
+    """
     global active
     while True:
         cmd = input().strip()
@@ -20,6 +33,12 @@ def processInput():
 
 
 def parse_target(s: str):
+    """
+    Parse a target string in the form 'host:port'.
+
+    Returns a (host, port) tuple after validating the port range and resolving
+    the host using getaddrinfo. Raises ValueError on invalid input.
+    """
     host, port_str = s.rsplit(":", 1)
     port = int(port_str)
     if not (1 <= port <= 65535):
@@ -27,7 +46,13 @@ def parse_target(s: str):
     socket.getaddrinfo(host, port)
     return host, port
 
-def findClient(host: str, port: int):
+def find_client(host: str, port: int):
+    """
+    Locate a connected client socket by its peer (host, port).
+
+    Searches the global `clients` mapping under `clients_lock`. Returns the
+    matching socket object or raises ValueError if no client is found.
+    """
     with clients_lock:
         for c, _ in clients.values():
             try:
@@ -40,10 +65,20 @@ def findClient(host: str, port: int):
 
 
 
-
-
-
 def handle_msg(msg: str, addr):
+    """
+    Process an incoming message from a client and return a response string.
+
+    If the message does not start with a backslash, it is echoed back
+    prefixed with 'Echo:'. If it does start with '\\' it is treated as a
+    command. Supported commands:
+    - \help : return usage information
+    - \list : return a list of connected clients
+    - \send ip:port message : forward `message` to the specified client
+
+    The function may also send data directly to other clients for the send
+    command and return status messages for the sender.
+    """
     msg = msg.strip()
     if not msg.startswith("\\"):
         return f"Echo: {msg}"
@@ -58,18 +93,16 @@ def handle_msg(msg: str, addr):
         case "help":
             return "Available commands:\n\\help - Show this help message\n\\send {ip:port} {msg} - Send to target\n\\list - List connected clients"
         case "list":
-            print(clients_lock)
-            print(clients)
-            print(addr)
+            # Build a human-readable list of connected clients
             with clients_lock:
                 return "Connected clients:\n" + "\n".join(
-                    f"{c.getpeername()} {"- user" if c.getpeername() == addr else ""}"  for t, (c, _) in clients.items()
+                    f"{c.getpeername()} {'- user' if c.getpeername() == addr else ''}" for t, (c, _) in clients.items()
                 )
         case "send" if (arg and mes):
             try:
                 host, port = parse_target(arg)
-                conn = findClient(host, port)
-                conn.sendall(f"[{addr}] {" ".join(mes)}".encode())
+                conn = find_client(host, port)
+                conn.sendall(f"[{addr}] {' '.join(mes)}".encode())
             except Exception as e:
                 return f"Something went wrong: \n(error: {e})\n Usage: \\{{send ip:port}} {{message}}"
             return f"Message sent to {host}:{port}"
@@ -80,17 +113,15 @@ def handle_msg(msg: str, addr):
 
 
 
+def process_client(conn, addr, stop_event):
+    """
+    Handle a single client connection.
 
-
-
-
-
-
-
-
-
-
-def processClient(conn, addr, stop_event):
+    Receives data in a loop until the client disconnects, the stop_event is
+    set, or an error occurs. Incoming messages are passed to `handle_msg` and
+    the returned response is sent back to the client. On exit the connection
+    is closed and the client removed from the global `clients` map.
+    """
     print("Processing client", addr)
 
     conn.settimeout(3.0)
@@ -135,6 +166,13 @@ def get_local_ip():
 
 
 def main():
+    """
+    Start the server: bind, listen and accept incoming client connections.
+
+    Spawns a background thread to process console input and tracks client
+    handler threads and their stop events in the `clients` mapping. On server
+    shutdown it signals all handlers to stop and closes their sockets.
+    """
     global active
 
     print("Server is running on local address:", get_local_ip())
@@ -144,13 +182,13 @@ def main():
     s.listen(30)
     s.settimeout(5.0)
 
-    threading.Thread(target=processInput, daemon=True).start()
+    threading.Thread(target=process_input, daemon=True).start()
 
     while active:
         try:
             conn, addr = s.accept()
             stop_event = threading.Event()
-            t = threading.Thread(target=processClient, args=(conn, addr, stop_event))
+            t = threading.Thread(target=process_client, args=(conn, addr, stop_event))
             with clients_lock:
                 clients[t] = (conn, stop_event)
             t.start()
